@@ -65,38 +65,46 @@ script_mod! {
                         align: Align{x: 0.5 y: 0.5}
                         capsule := View{
                             width: Fit height: 56
-                            padding: Inset{left: 28 right: 28 top: 0 bottom: 0}
+                            padding: Inset{left: 40 right: 28 top: 0 bottom: 0}
                             flow: Right spacing: 12
                             align: Align{y: 0.5}
+                            clip_x: true
+                            clip_y: true
                             show_bg: true
                             draw_bg +: {
                                 pixel: fn() {
                                     let w = self.rect_size.x
                                     let h = self.rect_size.y
                                     let r = h * 0.5
-                                    let cx_l = r
-                                    let cx_r = w - r
-                                    let cy = h * 0.5
                                     let px = self.pos.x * w
                                     let py = self.pos.y * h
 
-                                    let d_left = length(vec2(px - cx_l, py - cy)) - r
-                                    let d_right = length(vec2(px - cx_r, py - cy)) - r
-                                    let d_rect = max(abs(px - w * 0.5) - (cx_r - cx_l) * 0.5, abs(py - cy) - r)
-                                    let d = min(min(d_left, d_right), d_rect)
+                                    // Capsule background
+                                    let cx_bg = clamp(px, r, max(r, w - r))
+                                    let cy = h * 0.5
+                                    let d_bg = length(vec2(px - cx_bg, py - cy)) - r
+                                    let bg_alpha = 1.0 - smoothstep(-1.0, 1.0, d_bg)
+                                    let bg = vec4(0.1, 0.1, 0.18, bg_alpha * 0.82)
 
-                                    let aa = 1.0 / self.rect_size.y
-                                    let alpha = 1.0 - smoothstep(-aa, aa, d)
-                                    return Pal.premul(vec4(0.1, 0.1, 0.18, alpha * 0.82))
+                                    // Pulsing dot on the left side
+                                    let t = self.draw_pass.time
+                                    let pulse = 0.5 + 0.5 * sin(t * 4.0)
+                                    let dot_r = 4.0 + pulse * 3.0
+                                    let dot_cx = r + 2.0
+                                    let d_dot = length(vec2(px - dot_cx, py - cy)) - dot_r
+                                    let dot_alpha = (1.0 - smoothstep(-1.0, 1.0, d_dot)) * bg_alpha
+                                    let dot_color = mix(vec3(0.3, 0.6, 1.0), vec3(0.2, 0.9, 0.5), pulse)
+
+                                    // Composite: bg + dot
+                                    let final_rgb = mix(bg.xyz, dot_color, dot_alpha * 0.8)
+                                    let final_a = bg.w + dot_alpha * 0.6 * (1.0 - bg.w)
+                                    return Pal.premul(vec4(final_rgb, final_a))
                                 }
                             }
                             new_batch: true
-                            waveform := LoadingSpinner{
-                                width: 28 height: 28
-                            }
                             transcript_label := Label{
                                 width: Fit
-                                text: "Listening..."
+                                text: "🎙 Listening..."
                                 draw_text.color: #xffffffdd
                                 draw_text.text_style.font_size: 14
                             }
@@ -398,7 +406,7 @@ impl App {
         self.inner.smooth_rms = 0.0;
         self.inner.audio.start(cx);
         self.inner.waveform_next_frame = cx.new_next_frame();
-        self.ui.label(cx, ids!(transcript_label)).set_text(cx, "Listening...");
+        self.ui.label(cx, ids!(transcript_label)).set_text(cx, "🎙 Listening...");
         self.show_capsule(cx);
 
         if let Some(ref handle) = self.inner.status_bar_handle {
@@ -427,7 +435,7 @@ impl App {
             return;
         }
         self.inner.last_wav = audio::encode_wav(&samples, 16_000);
-        self.ui.label(cx, ids!(transcript_label)).set_text(cx, "Transcribing...");
+        self.ui.label(cx, ids!(transcript_label)).set_text(cx, "🔍 Transcribing...");
         transcribe::send_transcribe_request(
             cx,
             &self.inner.config.ominix_api.base_url,
@@ -453,7 +461,7 @@ impl App {
             || self.inner.config.language == "wen";     // 白话→文言文
         if needs_llm && !cfg.api_base_url.is_empty() && !cfg.api_key.is_empty() {
             self.inner.state = STATE_REFINING;
-            self.ui.label(cx, ids!(transcript_label)).set_text(cx, "Refining...");
+            self.ui.label(cx, ids!(transcript_label)).set_text(cx, "✨ Refining...");
             // Map ISO code to full language name for LLM
             let target_lang = match self.inner.config.language.as_str() {
                 "zh" => "Chinese",
@@ -529,8 +537,9 @@ impl MatchEvent for App {
     }
 
     fn handle_next_frame(&mut self, cx: &mut Cx, _e: &NextFrameEvent) {
-        if self.inner.state == STATE_RECORDING {
-            self.update_waveform(cx);
+        if self.inner.state != STATE_IDLE {
+            // Redraw capsule to animate the pulsing dot
+            self.ui.widget(cx, ids!(capsule_window)).redraw(cx);
             self.inner.waveform_next_frame = cx.new_next_frame();
         }
     }

@@ -1,12 +1,12 @@
 .PHONY: build run release bundle clean
 
-APP_NAME = VoiceInput
-BINARY_NAME = makepad-voice-input
+APP_NAME = Vox
+BINARY_NAME = vox
 BUNDLE_DIR = target/$(APP_NAME).app
-BUNDLE_ID = com.makepad.voice-input
+BUNDLE_ID = com.vox.input
 
 build:
-	cargo build -p $(BINARY_NAME)
+	cargo build -p vox
 
 run:
 	cargo run -p $(BINARY_NAME)

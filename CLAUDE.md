@@ -1,4 +1,4 @@
-# makepad-voice-input — Claude Code Instructions
+# vox — Claude Code Instructions
 
 See [DESIGN.md](DESIGN.md) for the architectural overview and design decisions.
 
@@ -27,10 +27,10 @@ Cargo workspace with two crates:
 
 ```bash
 # Run the app (requires ominix-api running separately)
-cargo run -p makepad-voice-input
+cargo run -p vox
 
 # Release build
-cargo build --release -p makepad-voice-input
+cargo build --release -p vox
 
 # Run ominix-api (separate terminal)
 cargo run --release -p ominix-api -- --asr-model ~/.OminiX/models/qwen3-asr-1.7b --port 8080
@@ -132,7 +132,7 @@ HTTP response                 →  MatchEvent handler   →  UI update via scrip
 
 ## Config
 
-User config stored at `~/.config/makepad-voice-input/config.json`. See DESIGN.md Section 4 for schema.
+User config stored at `~/.config/vox/config.json`. See DESIGN.md Section 4 for schema.
 
 ## macOS Permissions Required
 

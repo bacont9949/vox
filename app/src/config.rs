@@ -146,7 +146,7 @@ fn dirs_or_home() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let dir = PathBuf::from(home)
         .join(".config")
-        .join("makepad-voice-input");
+        .join("vox");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

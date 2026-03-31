@@ -22,6 +22,10 @@ estimate: 2d
   - `transcript.md` — 完整原始转录文本（每个 chunk 带时间戳，逐字记录）
   - `summary.md` — LLM 生成的结构化纪要（摘要/要点/决策/Action Items）
 - 即使 LLM 纪要生成失败，transcript.md 仍然保存
+- transcript.md 实时追加写入：每个 chunk 转录结果返回后立刻 append 到文件，不等会议结束
+- 胶囊窗口实时显示最新一句转录文本
+- 新增"会议转录窗口"（第 4 个 Makepad Window）：ScrollYView 实时渲染全部转录文本
+- 会议转录窗口在 Start Meeting 时自动打开，Stop Meeting 后保留（可手动关闭）
 - 胶囊窗口在会议期间显示录音时长和分段计数
 - 菜单栏图标在会议期间变为 "📝"
 - 新增 `app/src/meeting.rs` 模块，独立封装会议逻辑
@@ -105,6 +109,51 @@ estimate: 2d
   那么 第 2 个 chunk 的 WAV 数据被加入队列
   并且 不发送新的 HTTP 请求
   并且 第 1 个请求返回后，自动发送队列中的下一个
+
+场景: 转录结果实时写入文件
+  测试: test_realtime_write
+  假设 会议正在录音
+  当 第 2 个 chunk 转录返回 "这是第二段内容"
+  那么 transcript.md 立刻追加 "[00:30] 这是第二段内容"
+  并且 此时打开 transcript.md 可以看到前两段内容
+  并且 不需要等会议结束
+
+场景: 胶囊实时显示最新转录
+  测试: test_capsule_latest_text
+  假设 会议正在录音
+  当 最新 chunk 转录返回 "下一步我们讨论预算"
+  那么 胶囊窗口显示 "📝 ... 下一步我们讨论预算"
+  并且 显示内容为最新一句（非全部文本）
+
+场景: 会议转录窗口实时渲染
+  测试: test_transcript_window
+  假设 会议正在录音
+  当 Start Meeting 被触发
+  那么 弹出会议转录窗口（约 600x500，可滚动）
+  并且 窗口标题为 "Meeting Transcript"
+  并且 每个 chunk 转录返回后，文本追加到窗口底部
+  并且 窗口自动滚动到最新内容
+
+场景: 转录窗口显示时间戳
+  测试: test_transcript_window_timestamps
+  假设 第 3 个 chunk 转录返回
+  当 窗口更新
+  那么 显示格式为 "[01:00] 转录文本内容..."
+  并且 每段之间有换行分隔
+
+场景: 会议结束后转录窗口保留
+  测试: test_transcript_window_persist
+  假设 会议已结束
+  当 summary 保存完成
+  那么 转录窗口仍然显示（不自动关闭）
+  并且 用户可以手动关闭或复制内容
+
+场景: 中途崩溃不丢失已转录内容
+  测试: test_crash_recovery
+  假设 会议已录制 5 分钟（10 个 chunk 已写入 transcript.md）
+  当 应用意外退出
+  那么 transcript.md 保留已写入的 10 段转录文本
+  并且 无 summary.md（LLM 未执行）
 
 场景: 会议期间 Option 热键被禁用
   测试: test_hotkey_disabled_during_meeting

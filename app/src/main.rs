@@ -686,9 +686,10 @@ impl App {
         cx.stop_timer(self.inner.chunk_timer);
         cx.stop_timer(self.inner.meeting_display_timer);
 
-        // Drain remaining audio as final chunk
-        let remaining = self.inner.audio.drain_chunk();
-        self.inner.audio.stop(cx);
+        // Drain buffered audio + any frames captured during stop
+        let mut remaining = self.inner.audio.drain_chunk();
+        let tail = self.inner.audio.stop(cx);
+        remaining.extend_from_slice(&tail);
 
         if !remaining.is_empty() {
             let wav = audio::encode_wav(&remaining, 16_000);
@@ -754,11 +755,8 @@ impl App {
             session.add_chunk_result(text);
         }
 
-        // Send next queued chunk
+        // Send next queued chunk (already counted in pending_chunks when queued)
         if let Some(wav) = self.inner.chunk_queue.pop_front() {
-            if let Some(ref mut session) = self.inner.meeting_session {
-                session.pending_chunks += 1;
-            }
             transcribe::send_meeting_chunk_request(
                 cx,
                 &self.inner.config.ominix_api.base_url,
@@ -850,9 +848,10 @@ impl App {
             let display = if latest.is_empty() {
                 format!("📝 Meeting {} | {} chunks", elapsed, chunks)
             } else {
-                // Show last ~30 chars of latest text
-                let truncated = if latest.len() > 30 {
-                    format!("...{}", &latest[latest.len()-30..])
+                // Show last ~15 chars of latest text (char-safe for CJK)
+                let chars: Vec<char> = latest.chars().collect();
+                let truncated = if chars.len() > 15 {
+                    format!("...{}", chars[chars.len()-15..].iter().collect::<String>())
                 } else {
                     latest.to_string()
                 };

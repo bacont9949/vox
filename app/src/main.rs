@@ -869,6 +869,8 @@ fn get_main_screen_size() -> (f64, f64) {
         use makepad_widgets::makepad_platform::makepad_objc_sys::{msg_send, class, sel, sel_impl};
         use makepad_widgets::makepad_platform::makepad_objc_sys::runtime::Object;
         type ObjcId = *mut Object;
+        // SAFETY: NSScreen.mainScreen returns nil if no screen (null-checked).
+        // NSRect layout matches CGRect {CGPoint, CGSize} = {f64, f64, f64, f64} on 64-bit.
         unsafe {
             let main_screen: ObjcId = msg_send![class!(NSScreen), mainScreen];
             if !main_screen.is_null() {

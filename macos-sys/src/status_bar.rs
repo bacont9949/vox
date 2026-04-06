@@ -30,6 +30,7 @@ impl MenuItem {
 static MENU_TX: std::sync::OnceLock<crossbeam_channel::Sender<u64>> = std::sync::OnceLock::new();
 
 fn str_to_nsstring(s: &str) -> ObjcId {
+    // SAFETY: alloc+initWithBytes from valid UTF-8, autoreleased to prevent leak.
     unsafe {
         let ns_string: ObjcId = msg_send![class!(NSString), alloc];
         let ns_string: ObjcId = msg_send![
@@ -109,6 +110,9 @@ pub fn create_status_bar(
     let (tx, rx) = crossbeam_channel::unbounded();
     let _ = MENU_TX.set(tx);
 
+    // SAFETY: NSStatusBar.systemStatusBar returns a singleton (never null).
+    // statusItemWithLength:-1 creates a variable-width item. item is retained
+    // via explicit retain call below; released in Drop.
     unsafe {
         let status_bar: ObjcId = msg_send![class!(NSStatusBar), systemStatusBar];
         let item: ObjcId = msg_send![status_bar, statusItemWithLength: -1.0f64];
@@ -135,6 +139,9 @@ pub fn create_status_bar(
     }
 }
 
+/// SAFETY: Caller must ensure this runs on the main thread (AppKit requirement).
+/// All NSMenu/NSMenuItem allocations are autoreleased. The global_menu_target()
+/// singleton is retained forever and safe to reference from any menu item.
 unsafe fn build_ns_menu(items: &[MenuItem]) -> ObjcId {
     let menu: ObjcId = msg_send![class!(NSMenu), new];
     let () = msg_send![menu, setAutoenablesItems: NO];
@@ -181,6 +188,7 @@ unsafe fn build_ns_menu(items: &[MenuItem]) -> ObjcId {
 }
 
 pub fn update_menu(handle: &StatusBarHandle, menu_items: Vec<MenuItem>) {
+    // SAFETY: setMenu: on a valid NSStatusItem. Old menu is released by AppKit.
     unsafe {
         let menu = build_ns_menu(&menu_items);
         let () = msg_send![handle.item, setMenu: menu];
@@ -188,6 +196,7 @@ pub fn update_menu(handle: &StatusBarHandle, menu_items: Vec<MenuItem>) {
 }
 
 pub fn set_status_bar_icon(handle: &StatusBarHandle, title: &str) {
+    // SAFETY: button returns nil if no button (null-checked). setTitle: accepts valid NSString.
     unsafe {
         let button: ObjcId = msg_send![handle.item, button];
         if !button.is_null() {
@@ -199,6 +208,9 @@ pub fn set_status_bar_icon(handle: &StatusBarHandle, title: &str) {
 
 impl Drop for StatusBarHandle {
     fn drop(&mut self) {
+        // SAFETY: removeStatusItem: detaches from status bar. release balances
+        // the retain in create_status_bar. Must run on main thread (enforced by
+        // StatusBarHandle not being Send).
         unsafe {
             let status_bar: ObjcId = msg_send![class!(NSStatusBar), systemStatusBar];
             let () = msg_send![status_bar, removeStatusItem: self.item];

@@ -191,6 +191,10 @@ pub fn start_hotkey_monitor(
     let thread = std::thread::Builder::new()
         .name("hotkey-monitor".into())
         .spawn(move || {
+            // SAFETY: CGEventTapCreate registers our callback with macOS input system.
+            // ctx_ptr is Box::into_raw'd and reclaimed on all exit paths (null tap,
+            // null source, or CFRunLoopRun return). CFRunLoopRun blocks until
+            // CFRunLoopStop is called from HotkeyHandle::drop.
             unsafe {
                 let ctx = Box::new(TapContext {
                     key_mask,
@@ -268,6 +272,8 @@ impl Drop for HotkeyHandle {
         // Stop the CFRunLoop so the thread can exit
         if let Ok(rl) = self._run_loop.lock() {
             if *rl != 0 {
+                // SAFETY: CFRunLoopStop is thread-safe and idempotent.
+                // The usize was stored from CFRunLoopGetCurrent in the tap thread.
                 unsafe { CFRunLoopStop(*rl as *mut c_void); }
             }
         }

@@ -3,6 +3,7 @@ use serde_json::Value as JsonValue;
 
 /// Request ID for OminiX-style single-shot transcription.
 pub const TRANSCRIBE_REQUEST_ID: LiveId = live_id!(transcribe);
+pub const MEETING_CHUNK_REQUEST_ID: LiveId = live_id!(meeting_chunk);
 
 /// Streaming ASR: matches Python `QwenStreamingASRClient` (start → chunk → finish).
 pub const ASR_STREAM_START_ID: LiveId = live_id!(asr_stream_start);
@@ -48,6 +49,26 @@ pub fn send_transcribe_request(
     req.set_body(body.into_bytes());
 
     cx.http_request(TRANSCRIBE_REQUEST_ID, req);
+}
+
+/// Send a meeting chunk transcription request (same format as OminiX, different request ID).
+pub fn send_meeting_chunk_request(cx: &mut Cx, base_url: &str, wav_data: &[u8], language: &str, model: &str) {
+    let url = format!("{}/v1/audio/transcriptions", base_url.trim_end_matches('/'));
+    let asr_language = match language {
+        "zh" => "Chinese", "en" => "English", "ja" => "Japanese",
+        "ko" => "Korean", "zh-TW" => "Chinese", "wen" => "Chinese",
+        _ => language,
+    };
+    let b64 = base64_encode(wav_data);
+    let body = serde_json::json!({
+        "file": b64,
+        "language": asr_language,
+        "model": model,
+    }).to_string();
+    let mut req = HttpRequest::new(url, HttpMethod::POST);
+    req.set_header("Content-Type".into(), "application/json".into());
+    req.set_body(body.into_bytes());
+    cx.http_request(MEETING_CHUNK_REQUEST_ID, req);
 }
 
 /// Map app language to ISO code for `/api/start` (matches typical `ASR_LANGUAGE` env usage).
@@ -178,6 +199,8 @@ fn query_escape(s: &str) -> String {
 }
 
 /// Parse the OminiX transcription response (`{"text": "..."}`).
+/// Parse the OminiX transcription response (`{"text": "..."}`).
+
 pub fn parse_transcribe_response(response: &HttpResponse) -> Result<String, String> {
     if response.status_code != 200 {
         return Err(format!("HTTP {}", response.status_code));

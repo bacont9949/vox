@@ -8,6 +8,7 @@ use makepad_widgets::*;
 mod audio;
 mod config;
 mod llm_refine;
+mod meeting;
 mod text_inject;
 mod transcribe;
 
@@ -23,12 +24,20 @@ const MENU_LANG_KO: u64 = 14;
 const MENU_LANG_WEN: u64 = 15;
 const MENU_LLM_TOGGLE: u64 = 20;
 const MENU_SETTINGS: u64 = 21;
+const MENU_MEETING_START: u64 = 30;
+const MENU_MEETING_STOP: u64 = 31;
 const MENU_TEST_CAPSULE: u64 = 99;
 
+// Normal mode states
 const STATE_IDLE: u8 = 0;
 const STATE_RECORDING: u8 = 1;
 const STATE_TRANSCRIBING: u8 = 2;
 const STATE_REFINING: u8 = 3;
+
+// Meeting mode states (10+ range)
+const STATE_MEETING_RECORDING: u8 = 10;
+const STATE_MEETING_FINALIZING: u8 = 11;
+const STATE_MEETING_SUMMARIZING: u8 = 12;
 
 /// Qwen/vLLM streaming ASR in-flight step (after `POST /api/start`).
 #[allow(clippy::enum_variant_names)]
@@ -222,6 +231,11 @@ struct Inner {
     asr_stream_phase: Option<AsrStreamPhase>,
     test_asr_stream_phase: TestAsrStreamPhase,
     test_asr_stream_session_id: String,
+    // Meeting mode
+    meeting_session: Option<meeting::MeetingSession>,
+    chunk_timer: Timer,
+    meeting_display_timer: Timer,
+    chunk_queue: std::collections::VecDeque<Vec<u8>>,
 }
 
 #[derive(Script, ScriptHook)]
@@ -289,6 +303,14 @@ impl App {
                 MenuItem::new("Settings...", MENU_SETTINGS),
             ]),
             MenuItem::separator(),
+            MenuItem::submenu("Meeting Mode", vec![
+                if self.inner.state >= STATE_MEETING_RECORDING {
+                    MenuItem::new("Stop Meeting", MENU_MEETING_STOP)
+                } else {
+                    MenuItem::new("Start Meeting", MENU_MEETING_START)
+                },
+            ]),
+            MenuItem::separator(),
             MenuItem::new("Test Capsule", MENU_TEST_CAPSULE),
             MenuItem::separator(),
             MenuItem::new("Quit", MENU_QUIT),
@@ -329,6 +351,12 @@ impl App {
             }
             MENU_SETTINGS => {
                 self.show_settings(cx);
+            }
+            MENU_MEETING_START => {
+                self.start_meeting(cx);
+            }
+            MENU_MEETING_STOP => {
+                self.stop_meeting(cx);
             }
             MENU_TEST_CAPSULE => {
                 self.show_capsule(cx);
@@ -607,9 +635,230 @@ impl App {
         let raw_rms = self.inner.audio.read_rms();
         let alpha = if raw_rms > self.inner.smooth_rms { 0.4 } else { 0.15 };
         self.inner.smooth_rms += (raw_rms - self.inner.smooth_rms) * alpha;
-
-        // Redraw the entire capsule window to update draw_pass.time in shader
         self.ui.widget(cx, ids!(capsule_window)).redraw(cx);
+    }
+
+    // === Meeting Mode ===
+
+    fn start_meeting(&mut self, cx: &mut Cx) {
+        if self.inner.state != STATE_IDLE { return; }
+
+        let output_dir = std::path::PathBuf::from(&self.inner.config.meeting.output_dir);
+        let _ = std::fs::create_dir_all(&output_dir);
+
+        self.inner.meeting_session = Some(meeting::MeetingSession::new(
+            &output_dir,
+            &self.inner.config.language,
+        ));
+        self.inner.state = STATE_MEETING_RECORDING;
+        self.inner.chunk_queue.clear();
+
+        // Start audio
+        self.inner.audio.start(cx);
+
+        // Start chunk timer
+        let chunk_secs = self.inner.config.meeting.chunk_duration_secs as f64;
+        self.inner.chunk_timer = cx.start_interval(chunk_secs);
+
+        // Start display update timer (1s)
+        self.inner.meeting_display_timer = cx.start_interval(1.0);
+
+        // Start animation frame
+        self.inner.waveform_next_frame = cx.new_next_frame();
+
+        // Show capsule
+        self.show_capsule(cx);
+        self.update_meeting_display(cx);
+        self.refresh_menu();
+
+        // Status bar icon
+        if let Some(ref handle) = self.inner.status_bar_handle {
+            macos_sys::status_bar::set_status_bar_icon(handle, "📝");
+        }
+
+        log!("Meeting started");
+    }
+
+    fn stop_meeting(&mut self, cx: &mut Cx) {
+        if self.inner.state != STATE_MEETING_RECORDING { return; }
+
+        // Stop chunk timer
+        cx.stop_timer(self.inner.chunk_timer);
+        cx.stop_timer(self.inner.meeting_display_timer);
+
+        // Drain buffered audio + any frames captured during stop
+        let mut remaining = self.inner.audio.drain_chunk();
+        let tail = self.inner.audio.stop(cx);
+        remaining.extend_from_slice(&tail);
+
+        if !remaining.is_empty() {
+            let wav = audio::encode_wav(&remaining, 16_000);
+            if let Some(ref mut session) = self.inner.meeting_session {
+                session.pending_chunks += 1;
+                session.next_chunk_index += 1;
+            }
+            // Queue or send
+            if self.inner.meeting_session.as_ref().map_or(false, |s| s.pending_chunks == 1) {
+                transcribe::send_meeting_chunk_request(
+                    cx,
+                    &self.inner.config.ominix_api.base_url,
+                    &wav,
+                    &self.inner.config.language,
+                    &self.inner.config.ominix_api.asr_model,
+                );
+            } else {
+                self.inner.chunk_queue.push_back(wav);
+            }
+        }
+
+        self.inner.state = STATE_MEETING_FINALIZING;
+        self.ui.label(cx, ids!(transcript_label))
+            .set_text(cx, "📝 Finishing up...");
+
+        log!("Meeting stopping, waiting for pending chunks");
+
+        // If no pending chunks, finalize immediately
+        self.try_finalize_meeting(cx);
+    }
+
+    fn handle_chunk_tick(&mut self, cx: &mut Cx) {
+        if self.inner.state != STATE_MEETING_RECORDING { return; }
+
+        let samples = self.inner.audio.drain_chunk();
+        if samples.is_empty() { return; }
+
+        let wav = audio::encode_wav(&samples, 16_000);
+
+        if let Some(ref mut session) = self.inner.meeting_session {
+            session.next_chunk_index += 1;
+            session.pending_chunks += 1;
+        }
+
+        // Send or queue
+        let pending = self.inner.meeting_session.as_ref().map_or(0, |s| s.pending_chunks);
+        if pending == 1 {
+            transcribe::send_meeting_chunk_request(
+                cx,
+                &self.inner.config.ominix_api.base_url,
+                &wav,
+                &self.inner.config.language,
+                &self.inner.config.ominix_api.asr_model,
+            );
+        } else {
+            self.inner.chunk_queue.push_back(wav);
+        }
+    }
+
+    fn handle_meeting_chunk_response(&mut self, cx: &mut Cx, text: &str) {
+        if let Some(ref mut session) = self.inner.meeting_session {
+            session.pending_chunks = session.pending_chunks.saturating_sub(1);
+            session.add_chunk_result(text);
+        }
+
+        // Send next queued chunk (already counted in pending_chunks when queued)
+        if let Some(wav) = self.inner.chunk_queue.pop_front() {
+            transcribe::send_meeting_chunk_request(
+                cx,
+                &self.inner.config.ominix_api.base_url,
+                &wav,
+                &self.inner.config.language,
+                &self.inner.config.ominix_api.asr_model,
+            );
+        }
+
+        self.update_meeting_display(cx);
+
+        // If finalizing and no more pending, proceed
+        if self.inner.state == STATE_MEETING_FINALIZING {
+            self.try_finalize_meeting(cx);
+        }
+    }
+
+    fn try_finalize_meeting(&mut self, cx: &mut Cx) {
+        let pending = self.inner.meeting_session.as_ref().map_or(0, |s| s.pending_chunks);
+        if pending > 0 { return; }
+
+        // Finalize transcript.md
+        if let Some(ref mut session) = self.inner.meeting_session {
+            session.finalize_transcript();
+        }
+
+        // LLM summary if configured
+        let cfg = &self.inner.config;
+        let has_llm = cfg.meeting.auto_summary
+            && !cfg.llm_refine.api_base_url.is_empty()
+            && !cfg.llm_refine.api_key.is_empty();
+
+        if has_llm {
+            let transcript = self.inner.meeting_session.as_ref()
+                .map(|s| s.full_transcript())
+                .unwrap_or_default();
+            if !transcript.is_empty() {
+                self.inner.state = STATE_MEETING_SUMMARIZING;
+                self.ui.label(cx, ids!(transcript_label))
+                    .set_text(cx, "📝 Generating summary...");
+                llm_refine::send_summary_request(
+                    cx,
+                    &cfg.llm_refine.api_base_url,
+                    &cfg.llm_refine.api_key,
+                    &cfg.llm_refine.model,
+                    &cfg.meeting.summary_system_prompt,
+                    &transcript,
+                );
+                return;
+            }
+        }
+
+        // No LLM, save directly
+        self.save_meeting(cx, None);
+    }
+
+    fn save_meeting(&mut self, cx: &mut Cx, summary: Option<&str>) {
+        if let Some(ref session) = self.inner.meeting_session {
+            if let Some(summary_text) = summary {
+                if let Err(e) = session.save_summary(summary_text) {
+                    log!("Failed to save summary: {}", e);
+                }
+            }
+            let path = session.output_path().display().to_string();
+            self.ui.label(cx, ids!(transcript_label))
+                .set_text(cx, &format!("📝 Saved: {}", path));
+        }
+
+        // Clean up
+        self.inner.meeting_session = None;
+        self.inner.state = STATE_IDLE;
+        self.inner.chunk_queue.clear();
+        self.inner.error_dismiss_timer = cx.start_timeout(5.0);
+        self.refresh_menu();
+
+        // Restore status bar icon
+        if let Some(ref handle) = self.inner.status_bar_handle {
+            macos_sys::status_bar::set_status_bar_icon(handle, "MIC");
+        }
+
+        log!("Meeting saved");
+    }
+
+    fn update_meeting_display(&mut self, cx: &mut Cx) {
+        if let Some(ref session) = self.inner.meeting_session {
+            let elapsed = session.elapsed_display();
+            let chunks = session.chunks.len();
+            let latest = session.latest_text();
+            let display = if latest.is_empty() {
+                format!("📝 Meeting {} | {} chunks", elapsed, chunks)
+            } else {
+                // Show last ~15 chars of latest text (char-safe for CJK)
+                let chars: Vec<char> = latest.chars().collect();
+                let truncated = if chars.len() > 15 {
+                    format!("...{}", chars[chars.len()-15..].iter().collect::<String>())
+                } else {
+                    latest.to_string()
+                };
+                format!("📝 {} | {} {}", elapsed, chunks, truncated)
+            };
+            self.ui.label(cx, ids!(transcript_label)).set_text(cx, &display);
+        }
     }
 }
 
@@ -648,6 +897,13 @@ impl MatchEvent for App {
         if self.inner.deferred_setup_timer.is_timer(event).is_some() {
                 self.setup_status_bar();
         }
+        // Meeting mode timers
+        if self.inner.chunk_timer.is_timer(event).is_some() {
+            self.handle_chunk_tick(cx);
+        }
+        if self.inner.meeting_display_timer.is_timer(event).is_some() {
+            self.update_meeting_display(cx);
+        }
         if self.inner.menu_poll_timer.is_timer(event).is_some() {
             let menu_actions: Vec<u64> = self.inner.menu_rx.as_ref()
                 .map(|rx| rx.try_iter().collect()).unwrap_or_default();
@@ -662,10 +918,13 @@ impl MatchEvent for App {
                     let _ = writeln!(f, "APP: received {} hotkey events", hotkey_events.len());
                 }
             }
-            for evt in hotkey_events {
-                match evt {
-                    macos_sys::event_tap::HotkeyEvent::Pressed => self.start_recording(cx),
-                    macos_sys::event_tap::HotkeyEvent::Released => self.stop_recording(cx),
+            // Block hotkey during meeting mode
+            if self.inner.state < STATE_MEETING_RECORDING {
+                for evt in hotkey_events {
+                    match evt {
+                        macos_sys::event_tap::HotkeyEvent::Pressed => self.start_recording(cx),
+                        macos_sys::event_tap::HotkeyEvent::Released => self.stop_recording(cx),
+                    }
                 }
             }
         }
@@ -786,6 +1045,19 @@ impl MatchEvent for App {
                     self.inner.state = STATE_IDLE;
                 }
             }
+        } else if request_id == transcribe::MEETING_CHUNK_REQUEST_ID {
+            match transcribe::parse_transcribe_response(response) {
+                Ok(text) => self.handle_meeting_chunk_response(cx, &text),
+                Err(e) => self.handle_meeting_chunk_response(cx, &format!("(error: {e})")),
+            }
+        } else if request_id == llm_refine::LLM_SUMMARY_REQUEST_ID {
+            match llm_refine::parse_refine_response(response) {
+                Ok(summary) => self.save_meeting(cx, Some(&summary)),
+                Err(e) => {
+                    log!("LLM summary failed: {}", e);
+                    self.save_meeting(cx, None);
+                }
+            }
         } else if request_id == live_id!(test_connection) {
             if response.status_code == 200 {
                 self.ui.label(cx, ids!(settings_status)).set_text(cx, "Connected");
@@ -817,6 +1089,11 @@ impl MatchEvent for App {
             let original = self.inner.last_transcription.clone();
             self.inject_text(cx, &original);
             self.inner.state = STATE_IDLE;
+        } else if request_id == transcribe::MEETING_CHUNK_REQUEST_ID {
+            self.handle_meeting_chunk_response(cx, "(transcription failed)");
+        } else if request_id == llm_refine::LLM_SUMMARY_REQUEST_ID {
+            log!("LLM summary request failed");
+            self.save_meeting(cx, None);
         } else if request_id == live_id!(test_connection) {
             self.ui.label(cx, ids!(settings_status)).set_text(cx, "Connection failed");
         }

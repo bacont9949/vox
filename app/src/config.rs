@@ -14,6 +14,9 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub llm_refine: LlmRefineConfig,
+
+    #[serde(default)]
+    pub meeting: MeetingConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +60,58 @@ pub struct LlmRefineConfig {
     pub model: String,
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeetingConfig {
+    #[serde(default = "default_chunk_duration")]
+    pub chunk_duration_secs: u32,
+    #[serde(default = "default_meeting_output_dir")]
+    pub output_dir: String,
+    #[serde(default = "default_true")]
+    pub auto_summary: bool,
+    #[serde(default = "default_summary_prompt")]
+    pub summary_system_prompt: String,
+}
+
+impl Default for MeetingConfig {
+    fn default() -> Self {
+        Self {
+            chunk_duration_secs: default_chunk_duration(),
+            output_dir: default_meeting_output_dir(),
+            auto_summary: true,
+            summary_system_prompt: default_summary_prompt(),
+        }
+    }
+}
+
+fn default_chunk_duration() -> u32 { 30 }
+fn default_true() -> bool { true }
+fn default_meeting_output_dir() -> String {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    format!("{}/Documents/Vox", home)
+}
+fn default_summary_prompt() -> String {
+    r#"You are a meeting minutes assistant. Given a full meeting transcript, generate a structured summary.
+
+Output format (Markdown):
+## Summary
+(2-3 sentence overview)
+
+## Key Points
+- (bulleted list of important topics discussed)
+
+## Decisions
+- (bulleted list of decisions made, if any)
+
+## Action Items
+- [ ] (task) — assigned to (person), deadline (if mentioned)
+
+Rules:
+- Be concise and factual
+- Only include information explicitly stated in the transcript
+- If no decisions or action items were discussed, omit those sections
+- Output ONLY the Markdown, no preamble"#.to_string()
 }
 
 fn default_language() -> String { "zh".to_string() }
@@ -117,6 +172,7 @@ impl Default for AppConfig {
             hotkey: HotkeyConfig::default(),
             ominix_api: OminixApiConfig::default(),
             llm_refine: LlmRefineConfig::default(),
+            meeting: MeetingConfig::default(),
         }
     }
 }

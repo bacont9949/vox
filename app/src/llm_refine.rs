@@ -1,6 +1,7 @@
 use makepad_widgets::*;
 
 pub const LLM_REFINE_REQUEST_ID: LiveId = live_id!(llm_refine);
+pub const LLM_SUMMARY_REQUEST_ID: LiveId = live_id!(llm_summary);
 
 /// Send an LLM refine request to correct transcription errors.
 pub fn send_refine_request(
@@ -33,6 +34,32 @@ pub fn send_refine_request(
 
     cx.http_request(LLM_REFINE_REQUEST_ID, req);
     log!("LLM refine request sent");
+}
+
+/// Send a meeting summary request to LLM.
+pub fn send_summary_request(
+    cx: &mut Cx,
+    api_base_url: &str,
+    api_key: &str,
+    model: &str,
+    system_prompt: &str,
+    transcript: &str,
+) {
+    let url = format!("{}/v1/chat/completions", api_base_url.trim_end_matches('/'));
+    let body = format!(
+        r#"{{"model":"{}","messages":[{{"role":"system","content":{}}},{{"role":"user","content":{}}}],"temperature":0.2,"max_tokens":4096}}"#,
+        model,
+        serde_json::to_string(system_prompt).unwrap_or_default(),
+        serde_json::to_string(transcript).unwrap_or_default(),
+    );
+    let mut req = HttpRequest::new(url, HttpMethod::POST);
+    req.set_header("Content-Type".into(), "application/json".into());
+    if !api_key.is_empty() {
+        req.set_header("Authorization".into(), format!("Bearer {api_key}"));
+    }
+    req.set_body(body.into_bytes());
+    cx.http_request(LLM_SUMMARY_REQUEST_ID, req);
+    log!("LLM summary request sent");
 }
 
 /// Parse the LLM refine response.

@@ -109,6 +109,27 @@ impl AudioCapture {
         }
     }
 
+    /// Drain accumulated PCM samples without stopping recording.
+    /// Used by meeting mode to chunk audio while continuing capture.
+    pub fn drain_chunk(&self) -> Vec<f32> {
+        let device_sr =
+            f64::from_bits(self.device_sample_rate.load(Ordering::Relaxed));
+        let samples = if let Ok(mut buf) = self.pcm_buffer.lock() {
+            std::mem::take(&mut *buf)
+        } else {
+            return Vec::new();
+        };
+
+        if samples.is_empty() {
+            return Vec::new();
+        }
+
+        if (device_sr - TARGET_SAMPLE_RATE).abs() < 1.0 {
+            return samples;
+        }
+        resample(&samples, device_sr, TARGET_SAMPLE_RATE)
+    }
+
     /// Stop recording and return PCM samples resampled to 16kHz mono.
     pub fn stop(&mut self, cx: &mut Cx) -> Vec<f32> {
         self.active.store(false, Ordering::Relaxed);

